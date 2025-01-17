@@ -92,10 +92,13 @@ class RNCWebViewManagerImpl(private val newArch: Boolean = false) {
             WebView.setWebContentsDebuggingEnabled(true)
         }
         webView.setDownloadListener(DownloadListener { url, userAgent, contentDisposition, mimetype, contentLength ->
-            try {
+        try {
             // Check if the URL is a Base64 data URL
             if (url.startsWith("data:")) {
                 // Extract Base64 data and MIME type
+
+
+
                 val base64Prefix = url.substringAfter("data:").substringBefore(";")
                 val base64Data = url.substringAfter("base64,")
 
@@ -200,7 +203,7 @@ class RNCWebViewManagerImpl(private val newArch: Boolean = false) {
             // Catch any unexpected exceptions to avoid app crashes
             Log.e(TAG, "Error in DownloadListener: ${e.message}", e)
         }
-        })
+    })
         return RNCWebViewWrapper(context, webView)
     }
 
@@ -406,9 +409,11 @@ class RNCWebViewManagerImpl(private val newArch: Boolean = false) {
         }
         "injectJavaScript" -> webView.evaluateJavascriptWithFallback(args.getString(0))
         "loadUrl" -> {
-          val url = args?.getString(0) ?: throw RuntimeException("Arguments for loading an url are null!")
+          if (args == null) {
+            throw RuntimeException("Arguments for loading an url are null!")
+          }
           webView.progressChangedFilter.setWaitingForCommandLoadUrl(false)
-          webView.loadUrl(url)
+          webView.loadUrl(args.getString(0))
         }
         "requestFocus" -> webView.requestFocus()
         "clearFormData" -> webView.clearFormData()
