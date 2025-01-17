@@ -92,49 +92,114 @@ class RNCWebViewManagerImpl(private val newArch: Boolean = false) {
             WebView.setWebContentsDebuggingEnabled(true)
         }
         webView.setDownloadListener(DownloadListener { url, userAgent, contentDisposition, mimetype, contentLength ->
+            try {
+            // Check if the URL is a Base64 data URL
+            if (url.startsWith("data:")) {
+                // Extract Base64 data and MIME type
+                val base64Prefix = url.substringAfter("data:").substringBefore(";")
+                val base64Data = url.substringAfter("base64,")
+
+                val fileExtension = MimeTypeMap.getSingleton().getExtensionFromMimeType(base64Prefix) ?: "bin"
+
+                val guessedMimeType = mimetype ?: url.substringAfter("data:", "").substringBefore(";")
+    //            val fileExtension = MimeTypeMap.getSingleton().getExtensionFromMimeType(guessedMimeType) ?: "bin"
+                val fileName_ = "downloaded_file.$fileExtension"
+                val timestamp = System.currentTimeMillis().toString()
+
+                val fileName: String = fileName_.replace(".", "_$timestamp.")
+                // Decode and save Base64 data
+                val decodedBytes = Base64.decode(base64Data, Base64.DEFAULT)
+                val directory = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                val file = File(directory, fileName)
+
+                try {
+                    directory.mkdirs() // Ensure the directory exists
+                    file.writeBytes(decodedBytes) // Write file
+                    Log.i(TAG, "Base64 file saved: ${file.absolutePath}")
+
+                    // Notify the user about the successful download
+                    Toast.makeText(webView.context, "File downloaded: ${fileName}", Toast.LENGTH_LONG).show()
+                    val file = File(file.absolutePath)
+                    val uri = Uri.fromFile(file)
+                    context.sendBroadcast(Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE, uri))
+                } catch (e: IOException) {
+                    Log.e(TAG, "Error saving Base64 file", e)
+                    Toast.makeText(webView.context, "Failed to download file", Toast.LENGTH_LONG).show()
+                }
+
+                return@DownloadListener // Skip HTTP download logic
+            }
+
+            // Ignore WebView errors for this URL
             webView.setIgnoreErrFailedForThisURL(url)
-            val module = webView.reactApplicationContext.getNativeModule(RNCWebViewModule::class.java) ?: return@DownloadListener
+
+            // Get the RNCWebViewModule instance
+            val module = webView.reactApplicationContext.getNativeModule(RNCWebViewModule::class.java)
+                ?: run {
+                    Log.w(TAG, "RNCWebViewModule not found, aborting download.")
+                    return@DownloadListener
+                }
+
+            // Initialize DownloadManager.Request and handle unsupported URIs
             val request: DownloadManager.Request = try {
                 DownloadManager.Request(Uri.parse(url))
             } catch (e: IllegalArgumentException) {
-                Log.w(TAG, "Unsupported URI, aborting download", e)
+                Log.w(TAG, "Unsupported URI, aborting download.", e)
                 return@DownloadListener
             }
+
+            // Generate a sanitized filename
             var fileName = URLUtil.guessFileName(url, contentDisposition, mimetype)
+            fileName = fileName.replace(invalidCharRegex, "_") // Replace invalid characters with "_"
 
-            // Sanitize filename by replacing invalid characters with "_"
-            fileName = fileName.replace(invalidCharRegex, "_")
-
+            // Download notification message
             val downloadMessage = "Downloading $fileName"
 
-            //Attempt to add cookie, if it exists
-            var urlObj: URL? = null
+            // Add cookies to the request if available
             try {
-                urlObj = URL(url)
-                val baseUrl = urlObj.protocol + "://" + urlObj.host
+                val urlObj = URL(url)
+                val baseUrl = "${urlObj.protocol}://${urlObj.host}"
                 val cookie = CookieManager.getInstance().getCookie(baseUrl)
-                request.addRequestHeader("Cookie", cookie)
+                if (cookie != null) {
+                    request.addRequestHeader("Cookie", cookie)
+                }
             } catch (e: MalformedURLException) {
-                Log.w(TAG, "Error getting cookie for DownloadManager", e)
+                Log.w(TAG, "Malformed URL, could not retrieve cookies.", e)
             }
 
-            //Finish setting up request
+            // Set up the request details
             request.addRequestHeader("User-Agent", userAgent)
             request.setTitle(fileName)
             request.setDescription(downloadMessage)
             request.allowScanningByMediaScanner()
             request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-            request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName)
+
+            // Set destination directory for downloads
+            try {
+                request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName)
+            } catch (e: IllegalStateException) {
+                Log.e(TAG, "Error setting download destination.", e)
+                return@DownloadListener
+            }
+
+            // Assign the request to the module
             module.setDownloadRequest(request)
+
+            // Check permissions and start download
             if (module.grantFileDownloaderPermissions(
                     getDownloadingMessageOrDefault(),
                     getLackPermissionToDownloadMessageOrDefault()
                 )
             ) {
-                module.downloadFile(
-                    getDownloadingMessageOrDefault()
-                )
+                module.downloadFile(getDownloadingMessageOrDefault())
+            } else {
+                Log.e(TAG, "Missing permissions for file download.")
             }
+
+        } catch (e: Exception) {
+            // Catch any unexpected exceptions to avoid app crashes
+            Log.e(TAG, "Error in DownloadListener: ${e.message}", e)
+        }
         })
         return RNCWebViewWrapper(context, webView)
     }
